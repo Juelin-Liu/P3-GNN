@@ -8,6 +8,9 @@ class SAGE(nn.Module):
         self.activation = nn.ReLU()
         self.dropout = nn.Dropout()
         self.layers = nn.ModuleList()
+        
+        self.hid_feats_lst = []
+        
         for layer_idx in range(num_layers):
             if layer_idx == 0:
                 self.layers.append(SAGEConv(in_feats=in_feats, out_feats=hid_feats, aggregator_type='mean'))
@@ -20,10 +23,26 @@ class SAGE(nn.Module):
                     in_feats=hid_feats, out_feats=out_feats, aggregator_type='mean'))
 
     def forward(self, blocks, feat):
+        # self.hid_feats_lst = []
         hid_feats = feat
+        
+        def print_hid_grad(grad):
+            print("hid", grad, grad.shape)
+        
+        def print_fc_grad(grad):
+            print("fc", grad, grad.shape)
+            
+        def print_fcc_grad(grad):
+            print("fcc", grad, grad.shape)
+            
+            
         for layer_idx, (layer, block) in enumerate(zip(self.layers, blocks)):
             hid_feats = layer(block, hid_feats)
+            # hid_feats.register_hook(print_hid_grad)
+            
             if layer_idx != len(self.layers) - 1:
                 hid_feats = self.activation(hid_feats)
                 hid_feats = self.dropout(hid_feats)
+                
+            # self.hid_feats_lst.append(hid_feats)
         return hid_feats
