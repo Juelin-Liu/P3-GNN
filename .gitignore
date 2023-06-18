@@ -1,5 +1,8 @@
 dataset
 backup
+third_party
+logs
+
 *.ipynb
 *.csv
 
