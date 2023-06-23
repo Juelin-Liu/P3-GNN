@@ -25,7 +25,7 @@ import os
 import torch.multiprocessing as mp
 import math
 from ogb.lsc import MAG240MDataset
-from utils import DglSageSampler
+from utils import QuiverDglSageSample
 
 def ddp_setup(rank, world_size):
     """
@@ -53,8 +53,8 @@ def main_v0(rank:int,
     train_nids = idx_split['train'].to(torch.int64)
     valid_nids = idx_split['valid'].to(torch.int64)
     test_nids = idx_split['test'].to(torch.int64)
-    train_nids = parition_ids(rank, world_size, train_nids)
-    valid_nids = parition_ids(rank, world_size, valid_nids)
+    train_nids = partition_ids(rank, world_size, train_nids)
+    valid_nids = partition_ids(rank, world_size, valid_nids)
     # print(f"{rank=} {train_nids.shape=} {valid_nids.shape=}")
     config.rank = rank
     config.mode = 0
@@ -64,9 +64,9 @@ def main_v0(rank:int,
     # sampler = dgl.dataloading.NeighborSampler(config.fanouts)
     # train_dataloader = get_train_dataloader(config, sampler, graph, train_nids, use_uva=config.uva_sample())
     # val_dataloader = get_valid_dataloader(config, sampler, graph, valid_nids, use_uva=config.uva_sample())
-    train_dataloader = DglSageSampler(rank=rank, batch_size=config.batch_size, nids=train_nids, sampler=sampler)
-    val_dataloader = DglSageSampler(rank=rank, batch_size=config.batch_size, nids=valid_nids, sampler=sampler)
-    model = SAGE(in_feats=config.global_in_feats, hid_feats=config.hid_feats, num_layers=len(config.fanouts),out_feats=config.num_classes).to(rank)
+    train_dataloader = QuiverDglSageSample(rank=rank, batch_size=config.batch_size, nids=train_nids, sampler=sampler)
+    val_dataloader = QuiverDglSageSample(rank=rank, batch_size=config.batch_size, nids=valid_nids, sampler=sampler)
+    model = Sage(in_feats=config.global_in_feats, hid_feats=config.hid_feats, num_layers=len(config.fanouts),out_feats=config.num_classes).to(rank)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     trainer = QuiverTrainer(config, model, train_dataloader, val_dataloader, global_feat, node_labels, optimizer, torch.int64)
     trainer.train()
@@ -89,8 +89,8 @@ def main_v1(rank:int,
     train_nids = idx_split['train'].to(torch.int64)
     valid_nids = idx_split['valid'].to(torch.int64)
     test_nids = idx_split['test'].to(torch.int64)
-    train_nids = parition_ids(rank, world_size, train_nids)
-    valid_nids = parition_ids(rank, world_size, valid_nids)
+    train_nids = partition_ids(rank, world_size, train_nids)
+    valid_nids = partition_ids(rank, world_size, valid_nids)
     # print(f"{rank=} {train_nids.shape=} {valid_nids.shape=}")
 
     config.rank = rank
@@ -102,9 +102,9 @@ def main_v1(rank:int,
     # sampler = dgl.dataloading.NeighborSampler(config.fanouts)
     # train_dataloader = get_train_dataloader(config, sampler, graph, train_nids, use_uva=config.uva_sample())
     # val_dataloader = get_valid_dataloader(config, sampler, graph, valid_nids, use_uva=config.uva_sample())
-    train_dataloader = DglSageSampler(rank=rank, batch_size=config.batch_size, nids=train_nids, sampler=sampler)
-    val_dataloader = DglSageSampler(rank=rank, batch_size=config.batch_size, nids=valid_nids, sampler=sampler)
-    model = SAGE(in_feats=config.global_in_feats, hid_feats=config.hid_feats, num_layers=len(config.fanouts),out_feats=config.num_classes).to(config.rank)
+    train_dataloader = QuiverDglSageSample(rank=rank, batch_size=config.batch_size, nids=train_nids, sampler=sampler)
+    val_dataloader = QuiverDglSageSample(rank=rank, batch_size=config.batch_size, nids=valid_nids, sampler=sampler)
+    model = Sage(in_feats=config.global_in_feats, hid_feats=config.hid_feats, num_layers=len(config.fanouts),out_feats=config.num_classes).to(config.rank)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     trainer = DglTrainer(config, model, train_dataloader, val_dataloader, feat, node_labels, optimizer, torch.int64)
     trainer.train()
@@ -126,8 +126,8 @@ def main_v2(rank:int,
     train_nids = idx_split['train'].to(torch.int64)
     valid_nids = idx_split['valid'].to(torch.int64)
     test_nids = idx_split['test'].to(torch.int64)
-    train_nids = parition_ids(rank, world_size, train_nids)
-    valid_nids = parition_ids(rank, world_size, valid_nids)
+    train_nids = partition_ids(rank, world_size, train_nids)
+    valid_nids = partition_ids(rank, world_size, valid_nids)
     loc_feat = torch.load(os.path.join(dataset.dir, "processed", "paper", f"node_feat_w{world_size}_r{rank}.pt")).type(torch.float32)
     if config.uva_feat():
         loc_feat = loc_feat.pin_memory()
@@ -142,9 +142,9 @@ def main_v2(rank:int,
     # sampler = dgl.dataloading.NeighborSampler(config.fanouts)
     # train_dataloader = get_train_dataloader(config, sampler, graph, train_nids, use_uva=config.uva_sample())
     # val_dataloader = get_valid_dataloader(config, sampler, graph, valid_nids, use_uva=config.uva_sample())
-    model = SAGE(in_feats=config.global_in_feats, hid_feats=config.hid_feats, num_layers=len(config.fanouts),out_feats=config.num_classes).to(config.rank)
-    train_dataloader = DglSageSampler(rank=rank, batch_size=config.batch_size, nids=train_nids, sampler=sampler)
-    val_dataloader = DglSageSampler(rank=rank, batch_size=config.batch_size, nids=valid_nids, sampler=sampler)
+    model = Sage(in_feats=config.global_in_feats, hid_feats=config.hid_feats, num_layers=len(config.fanouts),out_feats=config.num_classes).to(config.rank)
+    train_dataloader = QuiverDglSageSample(rank=rank, batch_size=config.batch_size, nids=train_nids, sampler=sampler)
+    val_dataloader = QuiverDglSageSample(rank=rank, batch_size=config.batch_size, nids=valid_nids, sampler=sampler)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     trainer = P2Trainer(config, model, train_dataloader, val_dataloader, loc_feat, node_labels, optimizer, torch.int64)
     trainer.train()
@@ -166,8 +166,8 @@ def main_v3(rank:int,
     train_nids = idx_split['train'].to(torch.int64)
     valid_nids = idx_split['valid'].to(torch.int64)
     test_nids = idx_split['test'].to(torch.int64)
-    train_nids = parition_ids(rank, world_size, train_nids)
-    valid_nids = parition_ids(rank, world_size, valid_nids)
+    train_nids = partition_ids(rank, world_size, train_nids)
+    valid_nids = partition_ids(rank, world_size, valid_nids)
     # test_nids = idx_split['test'].to(rank).to(torch.int64)
     loc_feat = torch.load(os.path.join(dataset.dir, "processed", "paper", f"node_feat_w{world_size}_r{rank}.pt")).type(torch.float32)
     if config.uva_feat():
@@ -182,11 +182,11 @@ def main_v3(rank:int,
     # sampler = dgl.dataloading.NeighborSampler(config.fanouts)
     # train_dataloader = get_train_dataloader(config, sampler, graph, train_nids, use_uva=config.uva_sample())
     # val_dataloader = get_valid_dataloader(config, sampler, graph, valid_nids, use_uva=config.uva_sample())
-    local_model, global_model = create_p3model(rank, config.local_in_feats, hid_feats=config.hid_feats, num_layers=len(config.fanouts), num_classes=config.num_classes)
+    local_model, global_model = create_sage_p3(rank, config.local_in_feats, hid_feats=config.hid_feats, num_layers=len(config.fanouts), num_classes=config.num_classes)
     global_optimizer = torch.optim.Adam(global_model.parameters(), lr=1e-3)
     local_optimizer = torch.optim.Adam(local_model.parameters(), lr=1e-3)
-    train_dataloader = DglSageSampler(rank=rank, batch_size=config.batch_size, nids=train_nids, sampler=sampler)
-    val_dataloader = DglSageSampler(rank=rank, batch_size=config.batch_size, nids=valid_nids, sampler=sampler)
+    train_dataloader = QuiverDglSageSample(rank=rank, batch_size=config.batch_size, nids=train_nids, sampler=sampler)
+    val_dataloader = QuiverDglSageSample(rank=rank, batch_size=config.batch_size, nids=valid_nids, sampler=sampler)
     trainer = P3Trainer(config, global_model, local_model, train_dataloader, val_dataloader, loc_feat, node_labels, global_optimizer, local_optimizer, nid_dtype=torch.int64)
     trainer.train()
     destroy_process_group()

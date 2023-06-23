@@ -1,28 +1,28 @@
 # Contruct a two-layer GNN model
-from dgl.nn.pytorch.conv import SAGEConv
+from dgl.nn.pytorch.conv import GATConv
 import torch.nn as nn
 import torch
 import torch.distributed as dist
 
-class Sage(nn.Module):
-    def __init__(self, in_feats: int, hid_feats: int, num_layers: int, out_feats: int):
+class Gat(nn.Module):
+    def __init__(self, in_feats: int, hid_feats: int, num_layers: int, out_feats: int, num_heads: int=4):
         super().__init__()
         self.activation = nn.ReLU()
         self.dropout = nn.Dropout()
         self.layers = nn.ModuleList()
         self.fwd_l1_timer = []    
         self.hid_feats_lst = []
-        
+        hid_feats = int(hid_feats/num_heads)
         for layer_idx in range(num_layers):
             if layer_idx == 0:
-                self.layers.append(SAGEConv(in_feats=in_feats, out_feats=hid_feats, aggregator_type='mean'))
+                self.layers.append(GATConv(in_feats=in_feats, out_feats=hid_feats, num_heads=num_heads))
             elif layer_idx >= 1 and layer_idx < num_layers - 1:            
-                self.layers.append(SAGEConv(
-                    in_feats=hid_feats, out_feats=hid_feats, aggregator_type='mean'))
+                self.layers.append(GATConv(
+                    in_feats=hid_feats * num_heads, out_feats=hid_feats, num_heads=num_heads))
             else:
                 # last layer
-                self.layers.append(SAGEConv(
-                    in_feats=hid_feats, out_feats=out_feats, aggregator_type='mean'))
+                self.layers.append(GATConv(
+                    in_feats=hid_feats * num_heads, out_feats=out_feats, num_heads=1))
 
     def forward(self, blocks, feat):
         hid_feats = feat
@@ -37,6 +37,7 @@ class Sage(nn.Module):
             if layer_idx != len(self.layers) - 1:
                 hid_feats = self.activation(hid_feats)
                 hid_feats = self.dropout(hid_feats)
+            hid_feats = hid_feats.flatten(1)
         return hid_feats
     
     def fwd_l1_time(self):
@@ -47,14 +48,8 @@ class Sage(nn.Module):
         self.fwd_l1_timer = []
         return fwd_time
     
-    
-def create_sage_p3(rank:int, in_feats:int, hid_feats:int, num_classes:int, num_layers: int) -> tuple[nn.Module, nn.Module]:
-    first_layer = SAGEConv(in_feats=in_feats, out_feats=hid_feats, aggregator_type="mean").to(rank) # Intra-Model Parallel
-    remain_layers = SageP3(in_feats, hid_feats, num_layers, num_classes).to(rank) # Data Parallel
-    return (first_layer, remain_layers)
 
-
-class SageP3Shuffle(torch.autograd.Function):
+class GatP3Shuffle(torch.autograd.Function):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
@@ -85,31 +80,34 @@ class SageP3Shuffle(torch.autograd.Function):
         # print(f"self.rank={ctx.self_rank} send_grad_shape={grad_outputs.shape} global_grads_shape={[x.shape for x in ctx.global_grads]}")
         dist.all_gather(tensor=grad_outputs, tensor_list=ctx.global_grads)
         return None, None, grad_outputs, None, None
+
+class GatP3First(nn.Module):
+    def __init__(self, in_feats: int, hid_feats: int, num_heads: int):
+        super().__init__()
+        self.conv = GATConv(in_feats=in_feats, out_feats=int(hid_feats / num_heads), num_heads=num_heads)
+        
+    def forward(self, block, feat):
+        return self.conv(block, feat).flatten(1)
     
     
-class SageP3(nn.Module):
-    def __init__(self, 
-                 in_feats: int,
-                 hid_feats: int, 
-                 num_layers: int, 
-                 out_feats: int):
+class GatP3(nn.Module):
+    def __init__(self, in_feats: int, hid_feats: int, num_layers: int, out_feats: int, num_heads: int=4):
         super().__init__()
         self.activation = nn.ReLU()
         self.dropout = nn.Dropout()
         self.layers = nn.ModuleList()
+        self.hid_feats_lst = []
+        hid_feats = int(hid_feats/num_heads)
         for layer_idx in range(num_layers):
             if layer_idx == 0:
-                # first layer
                 continue
-                # self.layers.append(P3_SAGEConv(in_feats=in_feats, out_feats=hid_feats, aggregator_type='mean'))
-            elif layer_idx >= 1 and layer_idx < num_layers - 1:          
-                # middle layers  
-                self.layers.append(SAGEConv(
-                    in_feats=hid_feats, out_feats=hid_feats, aggregator_type='mean'))
+            elif layer_idx >= 1 and layer_idx < num_layers - 1:            
+                self.layers.append(GATConv(
+                    in_feats=hid_feats * num_heads, out_feats=hid_feats, num_heads=num_heads))
             else:
                 # last layer
-                self.layers.append(SAGEConv(
-                    in_feats=hid_feats, out_feats=out_feats, aggregator_type='mean'))
+                self.layers.append(GATConv(
+                    in_feats=hid_feats * num_heads, out_feats=out_feats, num_heads=1))
 
     def forward(self, blocks, feat):
         hid_feats = feat
@@ -118,4 +116,10 @@ class SageP3(nn.Module):
             if layer_idx != len(self.layers) - 1:
                 hid_feats = self.activation(hid_feats)
                 hid_feats = self.dropout(hid_feats)
+            hid_feats = hid_feats.flatten(1)
         return hid_feats
+    
+def create_gat_p3(rank:int, in_feats:int, hid_feats:int, num_classes:int, num_layers: int, num_heads: int=4) -> tuple[nn.Module, nn.Module]:
+    first_layer = GatP3First(in_feats, hid_feats, num_heads).to(rank) # Intra-Model Parallel
+    remain_layers = GatP3(in_feats, hid_feats, num_layers, num_classes, num_heads=num_heads).to(rank) # Data Parallel
+    return (first_layer, remain_layers)

@@ -1,11 +1,11 @@
- import torch
+import torch
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 import time
 from dgl.dataloading import DataLoader as DglDataLoader
 import torchmetrics.functional as MF
-from utils import RunConfig, TrainProfiler, DglSageSampler
+from utils import RunConfig, TrainProfiler, QuiverDglSageSample
 import quiver
 from dgl.utils import gather_pinned_tensor_rows
 
@@ -14,12 +14,12 @@ class P2Trainer:
         self,
         config: RunConfig,
         model: torch.nn.Module,
-        train_data: DglDataLoader | DglSageSampler,
-        val_data: DglDataLoader | DglSageSampler,
+        train_data: DglDataLoader,
+        val_data: DglDataLoader,
         local_feat: torch.Tensor, # local feature
         label: torch.Tensor,
         optimizer: torch.optim.Optimizer,
-        nid_dtype: torch.dtype = torch.int64
+        nid_dtype: torch.dtype = torch.int32
     ) -> None:
         self.config = config
         self.rank = config.rank
@@ -73,11 +73,11 @@ class P2Trainer:
                 self.input_node_buffer_lst[rank].resize_(input_node_size)
                 # self.global_feat_buffer_lst[rank].resize_([input_node_size, self.local_feat_width])
                 self.local_feat_buffer_lst[rank].resize_([input_nodes.shape[0], self.local_feat_width]) # 
-                
+            
             dist.all_gather(tensor_list=self.input_node_buffer_lst, tensor=input_nodes)
             # 3. Fetch feature data for other GPUs
             # for rank in range(self.world_size):
-            #     self.global_feat_buffer_lst[rank] = self.local_feat[self.input_node_buffer_lst[rank].long()]
+            #     self.global_feat_buffer_lst[rank] = self.local_feat[self.input_node_buffer_lst[rank]]
             #     torch.cuda.synchronize(self.device)                
             #     print(f"feat {self.rank=} {rank=}")
                 
@@ -102,7 +102,7 @@ class P2Trainer:
             torch.cuda.synchronize(self.device)
             concat_end = time.time()
                         
-            output_labels = self.node_labels[output_nodes.long()]
+            output_labels = self.node_labels[output_nodes]
             
             torch.cuda.synchronize(self.device)
             feat_end = forward_start = time.time()
@@ -187,7 +187,7 @@ class P2Trainer:
                     else:
                         dist.gather(tensor=self.global_feat_buffer_lst[rank], gather_list=None, dst=rank, async_op=False) # gathering data from other GPUs
                 x = torch.cat(self.local_feat_buffer_lst, dim=1)
-                ys.append(self.node_labels[output_nodes.long()])
+                ys.append(self.node_labels[output_nodes])
                 y_hats.append(self.model(blocks, x))
                 
         acc = MF.accuracy(

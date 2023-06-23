@@ -11,8 +11,8 @@ from dgl.utils import gather_pinned_tensor_rows
 
 import csv
 import torchmetrics.functional as MF
-from utils import RunConfig, TrainProfiler, DglSageSampler
-from models.sage import ShuffleLayer
+from utils import RunConfig, TrainProfiler, QuiverDglSageSample
+from models.sage import SageP3Shuffle
 import quiver
 
 class P3Trainer:
@@ -21,13 +21,13 @@ class P3Trainer:
         config: RunConfig,
         global_model: torch.nn.Module, # All Layers execpt for the first layer
         local_model: torch.nn.Module,
-        train_data: DglDataLoader | DglSageSampler,
-        val_data: DglDataLoader | DglSageSampler,
+        train_data: DglDataLoader,
+        val_data: DglDataLoader,
         local_feat: torch.Tensor | quiver.Feature, # Support UVA / GPU Feature Extraction
         node_labels: torch.Tensor,
         global_optimizer: torch.optim.Optimizer,
         local_optimizer: torch.optim.Optimizer,
-        nid_dtype: torch.dtype = torch.int64
+        nid_dtype: torch.dtype = torch.int32
     ) -> None:
         self.config = config
         self.rank = config.rank
@@ -69,7 +69,7 @@ class P3Trainer:
             self.input_feat_buffer_lst.append(torch.zeros([self.est_node_size, self.hid_feats], dtype=torch.float32, device=self.device))
 
         self.stream = torch.cuda.current_stream(self.device)
-        self.shuffle = ShuffleLayer.apply
+        self.shuffle = SageP3Shuffle.apply
 
     # fetch partial hid_feat from remote GPUs before forward pass
     # fetch partial gradient from remote GPUs during backward pass
@@ -86,7 +86,8 @@ class P3Trainer:
             iter_idx += 1
             feat_start = sample_end = time.time()
             # 1. Send and Receive edges for all the other gpus
-            src, dst = top_block.adj_tensors('coo')
+            src, dst = top_block.adj_tensors('coo') # dgl v1.1 and above
+            # src, dst = top_block.adj_sparse(fmt="coo") # dgl v1.0 and below
             self.edge_size_lst[self.rank] = (self.rank, src.shape[0], top_block.num_src_nodes(), top_block.num_dst_nodes()) # rank, edge_size, input_node_size
             dist.all_gather_object(object_list=self.edge_size_lst, obj=self.edge_size_lst[self.rank])
             # print(f"{self.rank=} {epoch=} {iter_idx=} {self.edge_size_lst=} start sending edges")
@@ -102,7 +103,7 @@ class P3Trainer:
             
             # # print(f"{self.rank=} {epoch=} {iter_idx=} input_node_shapes={[x.shape for x in self.input_node_buffer_lst]} start extracting local features")
             # for rank, _input_nodes in enumerate(self.input_node_buffer_lst):
-            #     self.input_feat_buffer_lst[rank] = self.local_feat[_input_nodes.long()]
+            #     self.input_feat_buffer_lst[rank] = self.local_feat[_input_nodes]
             handle1 = dist.all_gather(tensor_list=self.input_node_buffer_lst, tensor=input_nodes, async_op=True)
             handle2 = dist.all_gather(tensor_list=self.src_edge_buffer_lst, tensor=src, async_op=True)
             handle3 = dist.all_gather(tensor_list=self.dst_edge_buffer_lst, tensor=dst, async_op=True)
@@ -140,7 +141,7 @@ class P3Trainer:
             # print(f"{self.rank=} {epoch=} {iter_idx=} start reduce first hidden layer features")
             # dist.barrier()
             local_hid: torch.Tensor = self.shuffle(self.rank, self.world_size, self.local_hid_buffer_lst[self.rank], self.local_hid_buffer_lst, self.global_grad_lst)
-            output_labels = self.node_labels[output_nodes.long()]
+            output_labels = self.node_labels[output_nodes]
             
             # print(f"{self.rank=} {epoch=} {iter_idx=} local_hid_shape={[x.shape for x in self.local_hid_buffer_lst]} start compute remaining layer features")
 
@@ -218,7 +219,8 @@ class P3Trainer:
             with torch.no_grad():
                 top_block = blocks[0]
                 # 1. Send and Receive edges for all the other gpus
-                src, dst = top_block.adj_tensors('coo')
+                src, dst = top_block.adj_tensors('coo') # dgl v1.1 and above
+                # src, dst = top_block.adj_sparse(fmt='coo') # dgl v1.0 and below
                 self.edge_size_lst[self.rank] = (self.rank, src.shape[0], top_block.num_src_nodes(), top_block.num_dst_nodes()) # rank, edge_size, input_node_size
                 dist.all_gather_object(object_list=self.edge_size_lst, obj=self.edge_size_lst[self.rank])
                 for rank, edge_size, src_node_size, dst_node_size in self.edge_size_lst:
@@ -259,7 +261,7 @@ class P3Trainer:
                     del block
                     
                 local_hid = self.shuffle(self.rank, self.world_size, self.local_hid_buffer_lst[self.rank], self.local_hid_buffer_lst, None)
-                ys.append(self.node_labels[output_nodes.long()])
+                ys.append(self.node_labels[output_nodes])
                 y_hats.append(self.model(blocks[1:], local_hid))
                 
         acc = MF.accuracy(

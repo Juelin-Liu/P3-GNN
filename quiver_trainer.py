@@ -5,10 +5,9 @@ from torch.distributed import init_process_group, destroy_process_group
 import torch.distributed as dist
 from torch.cuda import Event as event
 import time
-from dgl.dataloading import DataLoader as DglDataLoader
 import csv
 import torchmetrics.functional as MF
-from utils import RunConfig, TrainProfiler, DglSageSampler
+from utils import RunConfig, TrainProfiler, QuiverDglSageSample
 import quiver
 
 class QuiverTrainer:
@@ -16,8 +15,8 @@ class QuiverTrainer:
         self,
         config: RunConfig,
         model: torch.nn.Module,
-        train_data: DglDataLoader | DglSageSampler,
-        val_data: DglDataLoader | DglSageSampler,
+        train_data: QuiverDglSageSample,
+        val_data: QuiverDglSageSample,
         global_feat: quiver.Feature, # quiver Feature
         label: torch.Tensor,
         optimizer: torch.optim.Optimizer,

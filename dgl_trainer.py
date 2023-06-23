@@ -8,15 +8,15 @@ import time
 from dgl.dataloading import DataLoader as DglDataLoader
 import csv
 import torchmetrics.functional as MF
-from utils import RunConfig, TrainProfiler, DglSageSampler
+from utils import RunConfig, TrainProfiler, QuiverDglSageSample
 
 class DglTrainer:
     def __init__(
         self,
         config: RunConfig,
         model: torch.nn.Module,
-        train_data: DglDataLoader | DglSageSampler,
-        val_data: DglDataLoader | DglSageSampler,
+        train_data: DglDataLoader | QuiverDglSageSample,
+        val_data: DglDataLoader | QuiverDglSageSample,
         feat: torch.Tensor, # All the feature data is kept in host memory (not pinned)
         label: torch.Tensor,
         optimizer: torch.optim.Optimizer,
@@ -57,7 +57,7 @@ class DglTrainer:
 
             torch.cuda.synchronize(self.device)
             feat_end = forward_start = time.time()
-            output_pred = self.model(blocks, input_feats)            
+            output_pred = self.model(blocks, input_feats)    
             loss = F.cross_entropy(output_pred, output_labels)
 
             torch.cuda.synchronize(self.device)
