@@ -9,6 +9,7 @@ from dgl.dataloading import DataLoader as DglDataLoader
 import csv
 import torchmetrics.functional as MF
 from utils import RunConfig, TrainProfiler, QuiverDglSageSample
+from dgl.utils import gather_pinned_tensor_rows
 
 class DglTrainer:
     def __init__(
@@ -52,8 +53,14 @@ class DglTrainer:
         for input_nodes, output_nodes, blocks in self.train_data:
             torch.cuda.synchronize(self.device)
             feat_start = sample_end = time.time()
-            input_feats = self.feat[input_nodes.to("cpu").long()].to(self.device)
-            output_labels = self.node_labels[output_nodes.long()]
+            input_feats = None
+            if self.config.feat == 'cpu':
+                input_feats = self.feat[input_nodes.to("cpu")].to(self.device)
+            elif self.config.feat == 'uva':
+                input_feats = gather_pinned_tensor_rows(self.feat, input_nodes)
+            else: # gpu feature extraction
+                input_feats = self.feat[input_nodes]
+            output_labels = self.node_labels[output_nodes]
 
             torch.cuda.synchronize(self.device)
             feat_end = forward_start = time.time()
@@ -108,10 +115,15 @@ class DglTrainer:
         y_hats = []
         for it, (input_nodes, output_nodes, blocks) in enumerate(self.val_data):
             with torch.no_grad():
-                # x = self.global_feat[input_nodes.long()]
-                x = self.feat[input_nodes.to("cpu").long()].to(self.device)
-                ys.append(self.node_labels[output_nodes.long()])
-                y_hats.append(self.model(blocks, x))
+                input_feats = None
+                if self.config.feat == 'cpu':
+                    input_feats = self.feat[input_nodes.to("cpu")].to(self.device)
+                elif self.config.feat == 'uva':
+                    input_feats = gather_pinned_tensor_rows(self.feat, input_nodes)
+                else: # gpu feature extraction
+                    input_feats = self.feat[input_nodes]
+                ys.append(self.node_labels[output_nodes])
+                y_hats.append(self.model(blocks, input_feats))
                 
         acc = MF.accuracy(
             torch.cat(y_hats),

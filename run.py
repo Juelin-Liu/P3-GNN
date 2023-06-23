@@ -111,6 +111,12 @@ def main_v1(rank:int,
     node_labels = node_labels.to(rank)
     train_nids = idx_split['train']  # nids must be in 32-bit int
     valid_nids = idx_split['valid']  # nids must be in 32-bit int
+    pinned_handle = None
+    if config.feat == 'uva':
+        pinned_handle = pin_memory_inplace(feat)
+    elif config.feat == 'gpu':
+        feat = feat.to(rank)
+        
     config.rank = rank
     config.mode = 1
     config.world_size = world_size
@@ -137,10 +143,10 @@ def main_v2(rank:int,
     train_nids = idx_split['train']
     valid_nids = idx_split['valid']
     pinned_handle = None
-    if config.uva_feat():
+    if config.feat == 'uva':
         pinned_handle = pin_memory_inplace(loc_feats[rank])
         loc_feat = loc_feats[rank]
-    else:
+    elif config.feat == 'gpu':
         loc_feat = loc_feats[rank].to(rank)
         
     config.rank = rank
@@ -170,10 +176,10 @@ def main_v3(rank:int,
     valid_nids = idx_split['valid']
     loc_feat = None
     pinned_handle = None
-    if config.uva_feat():
+    if config.feat == 'uva':
         pinned_handle = pin_memory_inplace(loc_feats[rank])
         loc_feat = loc_feats[rank]
-    else:
+    elif config.feat == 'gpu':
         loc_feat = loc_feats[rank].to(rank)
         
     config.rank = rank
