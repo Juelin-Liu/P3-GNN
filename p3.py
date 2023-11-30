@@ -66,15 +66,17 @@ def ddp_setup(rank, world_size):
     torch.cuda.set_device(rank)
 
 def train_p3(rank:int, 
+         in_dir: str,
          config: Config,
          graph: dgl.DGLGraph,
-         loc_feats: list[torch.Tensor], # CPU feature
          node_labels: torch.Tensor, 
          train_idx: torch.Tensor,
          valid_idx: torch.Tensor):
     ddp_setup(rank, config.world_size)
     node_labels = node_labels.to(rank)
-    feat = loc_feats[rank]
+    feat = load_p3_feat(in_dir, rank, config.world_size)
+    config.global_in_feats = feat.shape[1] * config.world_size
+    config.local_in_feats = feat.shape[1]
     pinned_handle = None
     if "uva" in config.system:
         pinned_handle = pin_memory_inplace(feat)
@@ -97,10 +99,10 @@ def train_p3(rank:int,
     destroy_process_group()
 
 def get_configs(graph_name, system, log_path, data_dir):
-    fanouts = [[10, 10, 10]]
-    batch_sizes = [1024]
-    models = ["sage"]
-    hid_sizes = [128]
+    fanouts = [[20, 20, 20]]
+    batch_sizes = [256]
+    models = ["sage","gat"]
+    hid_sizes = [256]
     cache_sizes = [0]
     # fanouts = [[20,20,20],[20,20,20,20], [30,30,30]]
     # batch_sizes = [1024, 4096]
@@ -114,7 +116,7 @@ def get_configs(graph_name, system, log_path, data_dir):
                     for cache_size in cache_sizes:
                         config = Config(graph_name=graph_name, 
                                         world_size=4, 
-                                        num_epoch=10, 
+                                        num_epoch=5, 
                                         fanouts=fanout, 
                                         batch_size=batch_size, 
                                         system=system, 
@@ -135,27 +137,28 @@ def bench_p3_batch(configs: list[Config]):
             assert(config.graph_name == configs[0].graph_name)
     
     in_dir = os.path.join(config.data_dir, config.graph_name)
+    prep_p3_feat(in_dir, config.world_size)
+    label, num_label = load_label(in_dir)
     graph = load_dgl_graph(in_dir, is32=True, wsloop=True)
     graph.create_formats_()
     graph.pin_memory_()
-    feat, label, num_label = load_feat_label(in_dir)
     train_idx, valid_idx, test_idx = load_idx_split(in_dir, is32=True)
-    feats = [None] * config.world_size
-    for i in range(config.world_size):
-        feats[i] = get_local_feat(i, config.world_size, feat, padding=True).clone()
-        if i == 0:
-            global_in_feats = feats[i].shape[1] * config.world_size
-            local_in_feats = feats[i].shape[1]
-        assert(global_in_feats == feats[i].shape[1] * config.world_size)
-        assert(local_in_feats == feats[i].shape[1])
-    del feat
+    # feats = [None] * config.world_size
+    # for i in range(config.world_size):
+    #     feats[i] = get_local_feat(i, config.world_size, feat, padding=True).clone()
+    #     if i == 0:
+    #         global_in_feats = feats[i].shape[1] * config.world_size
+    #         local_in_feats = feats[i].shape[1]
+    #     assert(global_in_feats == feats[i].shape[1] * config.world_size)
+    #     assert(local_in_feats == feats[i].shape[1])
+    # del feat
         
     for config in configs:
         config.num_classes = num_label
-        config.global_in_feats = global_in_feats
-        config.local_in_feats = local_in_feats
+        # config.global_in_feats = global_in_feats
+        # config.local_in_feats = local_in_feats
         try:       
-            mp.spawn(train_p3, args=(config, graph, feats, label, train_idx, valid_idx), nprocs=config.world_size, daemon=True)            
+            mp.spawn(train_p3, args=(in_dir, config, graph, label, train_idx, valid_idx), nprocs=config.world_size, daemon=True)            
         except Exception as e:
             print(e, "exception")
             # if "out of memory"in str(e):
@@ -167,6 +170,6 @@ def bench_p3_batch(configs: list[Config]):
         
     
 if __name__ == "__main__":
-    root_dir = in_dir = "/data/juelin/dataset/OGBN/processed"
-    configs = get_configs("ogbn-products", "p3-uva", "/data/juelin/project/P3-GNN/p3.csv", in_dir)
+    root_dir = in_dir = "/data/snap/"
+    configs = get_configs("com-friendster", "p3-uva", "/home/juelin/P3-GNN/p3.csv", in_dir)
     bench_p3_batch(configs=configs)

@@ -355,6 +355,42 @@ def load_feat_label(in_dir) -> (torch.Tensor, torch.Tensor, int):
     num_labels = torch.unique(label).shape[0]
     return feat, label, num_labels
 
+def load_label(in_dir) -> (torch.Tensor, torch.Tensor, int):
+    label = torch.load(os.path.join(in_dir, f"label.pt"))
+    num_labels = torch.unique(label).shape[0]
+    return label, num_labels
+
+def load_p3_feat(in_dir, rank, world_size):
+    file_path = os.path.join(in_dir, f"feat_r{rank}_w{world_size}.pt")
+    if os.path.isfile(file_path):
+        print(f"loading {file_path}")
+        feat = torch.load(file_path)
+        return feat
+    else:
+        print(f"{file_path} does not exists")
+        exit(-1)
+
+def prep_p3_feat(in_dir, world_size):
+    isPrep = True
+    for rank in range(world_size):
+        file_path = os.path.join(in_dir, f"feat_r{rank}_w{world_size}.pt")
+        if os.path.isfile(file_path):
+            print(f"file {file_path} exists")
+        else:
+            isPrep = False
+    if isPrep:
+        print("P3 feat has been processed")
+    else:
+        print(f"Prep P3 feat {in_dir}")
+        feat, _, _ = load_feat_label(in_dir)
+        for i in range(world_size):
+            rank = i
+            file_path = os.path.join(in_dir, f"feat_r{rank}_w{world_size}.pt")
+            loc_feat = get_local_feat(rank, world_size, feat, padding=True).clone()
+            torch.save(loc_feat, file_path)
+        del feat
+
+
 def load_dgl_graph(in_dir, is32=False, wsloop=False) -> dgl.DGLGraph:
     indptr, indices, edges = load_graph(in_dir, is32, wsloop)
     graph = _build_dgl_graph(indptr, indices, edges)
@@ -484,7 +520,7 @@ class Config:
         try:
             self.machine_name = os.environ['MACHINE_NAME']
         except Exception as e:
-            self.machine_name = "jupiter"
+            self.machine_name = "g4dn.12xlarge"
         self.graph_name = graph_name
         self.world_size = world_size
         self.num_epoch = num_epoch
