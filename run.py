@@ -14,7 +14,7 @@ from ogb.nodeproppred import DglNodePropPredDataset
 from models.sage import Sage, create_sage_p3
 from models.gat import Gat, create_gat_p3
 from dgl_trainer import DglTrainer
-from p2_trainer import P2Trainer
+from distload_trainer import P2Trainer
 from p3_trainer import P3Trainer
 from quiver_trainer import QuiverTrainer
 import quiver
@@ -75,7 +75,7 @@ def ddp_setup(rank, world_size):
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
-def main_v0(rank:int, 
+def quiver_train(rank:int, 
          world_size:int, 
          config: RunConfig,
          global_feat: quiver.Feature, # CPU feature
@@ -99,7 +99,7 @@ def main_v0(rank:int,
     trainer.train()
     destroy_process_group()
     
-def main_v1(rank:int, 
+def dgl_train(rank:int, 
          world_size:int, 
          config: RunConfig,
          feat: torch.Tensor,
@@ -130,7 +130,7 @@ def main_v1(rank:int,
     trainer.train()
     destroy_process_group()
     
-def main_v2(rank:int, 
+def distload_train(rank:int, 
          world_size:int, 
          config: RunConfig,
          loc_feats: list[torch.Tensor], # CPU feature
@@ -162,7 +162,7 @@ def main_v2(rank:int,
     trainer.train()
     destroy_process_group()
 
-def main_v3(rank:int, 
+def p3_train(rank:int, 
          world_size:int, 
          config: RunConfig,
          loc_feats: list[torch.Tensor], # CPU feature
@@ -210,14 +210,17 @@ if __name__ == "__main__":
     parser.add_argument('--num_heads', default=4, type=int, help='Number of heads for GAT model')
     parser.add_argument('--graph_name', default="ogbn-arxiv", type=str, help="Input graph name any of ['ogbn-arxiv', 'ogbn-products', 'ogbn-papers100M']", choices=['ogbn-arxiv', 'ogbn-products', 'ogbn-papers100M'])
     args = parser.parse_args()
+    project_dir = os.path.dirname(os.path.realpath(__file__))
+    log_dir = os.path.join(project_dir, "logs")
+    data_dir = os.path.join(project_dir, "dataset")
+    
     config = RunConfig()
     world_size = min(args.nprocs, torch.cuda.device_count())
     print(f"using {world_size} GPUs in mode {args.mode}")
     print("start loading data")
     
     load_start = time.time()
-    root_dir = "/data/juelin/dataset/OGBN/"
-    dataset = DglNodePropPredDataset(args.graph_name, root=root_dir)
+    dataset = DglNodePropPredDataset(args.graph_name, root=data_dir)
     load_end = time.time()
     print(f"finish loading in {round(load_end - load_start, 1)}s")
     
@@ -227,7 +230,8 @@ if __name__ == "__main__":
     node_labels = node_labels.flatten().clone()
     torch.nan_to_num_(node_labels, nan=0.1)
     node_labels: torch.Tensor = node_labels.type(torch.int64)
-    feat: torch.Tensor = graph.dstdata.pop("feat")    
+    feat: torch.Tensor = graph.dstdata.pop("feat")
+     
     config.num_classes = dataset.num_classes
     config.batch_size = args.batch_size
     config.total_epoch = args.total_epochs
@@ -241,6 +245,7 @@ if __name__ == "__main__":
     config.model = args.model
     config.num_heads = args.num_heads
     idx_split = dataset.get_idx_split()
+    config.log_dir = log_dir
 
     if config.uva_feat():
         print("using uva feature extraction")
@@ -262,7 +267,7 @@ if __name__ == "__main__":
         qfeat.from_cpu_tensor(feat)
         del feat
         gc.collect()
-        mp.spawn(main_v0, args=(world_size, config, qfeat, sampler, node_labels, idx_split), nprocs=world_size, daemon=True)
+        mp.spawn(quiver_train, args=(world_size, config, qfeat, sampler, node_labels, idx_split), nprocs=world_size, daemon=True)
         exit(0)
         
     graph = graph.int()
@@ -277,7 +282,7 @@ if __name__ == "__main__":
     
     if args.mode == 1:
         # DGL Data Parallel
-        mp.spawn(main_v1, args=(world_size, config, feat, sampler, node_labels, idx_split), nprocs=world_size, daemon=True)
+        mp.spawn(dgl_train, args=(world_size, config, feat, sampler, node_labels, idx_split), nprocs=world_size, daemon=True)
     elif args.mode == 2 or args.mode == 3:
         # Feature data is horizontally partitioned
         feats = [None] * world_size
@@ -293,7 +298,7 @@ if __name__ == "__main__":
         gc.collect()
         if args.mode == 2:
             # P2 Data Vertical Split
-            mp.spawn(main_v2, args=(world_size, config, feats, sampler, node_labels, idx_split), nprocs=world_size, daemon=True)
+            mp.spawn(distload_train, args=(world_size, config, feats, sampler, node_labels, idx_split), nprocs=world_size, daemon=True)
         elif args.mode == 3:
             # P3 Data Vertical Split + Intra-Model Parallelism
-            mp.spawn(main_v3, args=(world_size, config, feats, sampler, node_labels, idx_split), nprocs=world_size, daemon=True)            
+            mp.spawn(p3_train, args=(world_size, config, feats, sampler, node_labels, idx_split), nprocs=world_size, daemon=True)            

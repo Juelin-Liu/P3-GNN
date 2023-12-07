@@ -6,7 +6,7 @@ import time
 import csv
 from dataclasses import dataclass
 from dgl import create_block
-
+import os
 
 def partition_ids(rank: int, world_size: int, nids: torch.Tensor) -> torch.Tensor:
     step = int(nids.shape[0] / world_size)
@@ -220,13 +220,13 @@ class RunConfig:
     total_epoch: int = 30
     save_every: int = 30
     fanouts: list[int] = None
+    log_dir: str = ""
     graph_name: str = "ogbn-arxiv"
     log_path: str = "log.csv" # logging output path
     checkpt_path: str = "checkpt.pt" # checkpt path
     model: str = "sage" # model (sage or gat)
     num_heads: int = 3 # if use GAT, number of heads in the model
     mode: int = 1 # runner version
-    
     def uva_sample(self) -> bool:
         return self.topo == 'uva'
     
@@ -234,7 +234,7 @@ class RunConfig:
         return self.feat == 'uva'
     
     def set_logpath(self):
-        dir1 = f"{self.feat.lower()}feat"
-        dir2 = f"{self.topo.lower()}topo"
-        self.log_path = f"./logs/{self.graph_name}_v{self.mode}_w{self.world_size}_{dir1}_{dir2}_h{self.hid_feats}_b{self.batch_size}.csv"
+        feat_setting = f"{self.feat.lower()}feat"
+        topo_setting = f"{self.topo.lower()}topo"
+        self.log_path = os.path.join(self.log_dir, f"{self.graph_name}_v{self.mode}_w{self.world_size}_{feat_setting}_{topo_setting}_h{self.hid_feats}_b{self.batch_size}.csv")
 

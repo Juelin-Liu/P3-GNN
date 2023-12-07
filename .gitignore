@@ -1,7 +1,5 @@
-dataset
 backup
 third_party
-logs
 .vscode
 *.ipynb
 *.csv
